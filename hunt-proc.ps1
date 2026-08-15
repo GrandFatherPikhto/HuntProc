@@ -70,7 +70,7 @@ if (-not (Test-Path $ConfigPath)) {
     Write-Host "ВНИМАНИЕ: конфиг $ConfigPath не найден — работаю на дефолтах" -ForegroundColor Yellow
 }
 
-if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot "hunt-proc_config.psd1" }
+if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot "hunt-proc.config.psd1" }
 $config = @{}
 if (Test-Path $ConfigPath) {
     try { $config = Import-PowerShellDataFile $ConfigPath }
