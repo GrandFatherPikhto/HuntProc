@@ -1,4 +1,4 @@
-﻿# hunt-proc.ps1 (v3.1) — охотник за смертями процессов (по умолчанию kicad.exe).
+﻿# hunt-proc.ps1 (v3.2) — охотник за смертями процессов (по умолчанию kicad.exe).
 #
 # Что умеет:
 #   - цепляет ProcDump к КАЖДОМУ инстансу отслеживаемых процессов
@@ -9,7 +9,7 @@
 #     кладёт <дамп>.analysis.txt и печатает вердикт в лог
 #   - при старте подбирает НЕВСКРЫТЫЕ дампы прошлых сессий (сироты после
 #     убитого охотника) и вскрывает их тоже
-#   - настройки в hunt-proc_config.psd1 рядом со скриптом;
+#   - настройки в hunt-proc.config.psd1 рядом со скриптом;
 #     приоритет: параметры командной строки > конфиг > дефолты
 #
 # Режимы:
@@ -24,6 +24,12 @@
 #   v3.0 — конфиг-файл; подбор дампов-сирот при старте; режим -Analyze;
 #          выбор Full/Mini дампов (мини влезают во вложения GitLab)
 #   v3.1 — ProcessNames в конфиге: охота на любые процессы, не только kicad
+#   v3.2 — дефолтное имя конфига поправлено на реальное (hunt-proc.config.psd1,
+#          было hunt-proc_config.psd1 — подчёркивание вместо точки, конфиг
+#          молча не находился); дампы чистого завершения (Exit Code 0) больше
+#          не идут на cdb-анализ и сразу удаляются — ProcDump сам не умеет
+#          фильтровать -t по коду выхода, но держать 3+ ГБ ради обычного
+#          закрытия KiCad незачем
 
 [CmdletBinding()]
 param(
@@ -265,12 +271,30 @@ while ($true) {
 
     # 2. Кто из procdump'ов завершился — разобрать и вскрыть свежие дампы
     $done = @($hunted.Keys | Where-Object { $hunted[$_].Proc.HasExited })
+    $skipDumps = @{}   # путь -> $true — дампы от чистого завершения (Exit 0), не анализируем
     foreach ($p in $done) {
         Log "procdump для $($hunted[$p].Name).exe PID $p отцепился"
-        $tail = Get-Content $hunted[$p].Log -Encoding Unicode -ErrorAction SilentlyContinue |
+        $logLines = @(Get-Content $hunted[$p].Log -Encoding Unicode -ErrorAction SilentlyContinue)
+        $tail = $logLines |
                 Where-Object { $_ -match 'Dump \d+ (initiated|complete)|Terminated|Exception|Process Exit|Unhandled' } |
                 Select-Object -Last 8
         foreach ($t in $tail) { Log "  procdump[$($hunted[$p].Name):$p]: $($t.Trim())" }
+
+        # ProcDump сам не умеет фильтровать -t по коду выхода (проверено -?,
+        # такого флага нет) — дамп на диск он всё равно пишет. Но если
+        # завершение чистое (Exit Code 0x00000000 — обычное закрытие
+        # приложения, не крash), сам дамп бесполезен для BugReport: помечаем
+        # на удаление БЕЗ передачи в cdb, экономя и место, и ~минуту анализа.
+        # Дампы от РЕАЛЬНЫХ исключений в этой же сессии (Dump N initiated ДО
+        # строки Process Exit) не трогаем — считаем только те "Dump N
+        # initiated", что идут ПОСЛЕ строки чистого выхода.
+        $exitMatch = $logLines | Select-String 'Process Exit: PID \d+, Exit Code 0x00000000' |
+                     Select-Object -First 1
+        if ($exitMatch) {
+            $logLines | Select-String 'Dump \d+ initiated:\s*(.+\.dmp)' |
+                Where-Object { $_.LineNumber -gt $exitMatch.LineNumber } |
+                ForEach-Object { $skipDumps[$_.Matches[0].Groups[1].Value.Trim()] = $true }
+        }
         $hunted.Remove($p)
     }
     if ($done.Count -gt 0) {
@@ -280,7 +304,14 @@ while ($true) {
                                 -not (Test-Path "$($_.FullName).analysis.txt") -and
                                 -not $analysisJobs.ContainsKey($_.FullName) } |
                  Sort-Object LastWriteTime
-        foreach ($d in $fresh) { Start-DumpAnalysis $d.FullName }
+        foreach ($d in $fresh) {
+            if ($skipDumps.ContainsKey($d.FullName)) {
+                Log "  чистое завершение (Exit 0) — дамп без анализа, удаляю: $($d.Name)"
+                Remove-Item $d.FullName -Force -ErrorAction SilentlyContinue
+                continue
+            }
+            Start-DumpAnalysis $d.FullName
+        }
     }
 
     # 3. Собрать готовые фоновые вскрытия
