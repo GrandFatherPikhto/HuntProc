@@ -1,4 +1,4 @@
-﻿# hunt-proc.ps1 (v3.2) — охотник за смертями процессов (по умолчанию kicad.exe).
+﻿# hunt-proc.ps1 (v3.3) — охотник за смертями процессов (по умолчанию kicad.exe).
 #
 # Что умеет:
 #   - цепляет ProcDump к КАЖДОМУ инстансу отслеживаемых процессов
@@ -30,6 +30,10 @@
 #          не идут на cdb-анализ и сразу удаляются — ProcDump сам не умеет
 #          фильтровать -t по коду выхода, но держать 3+ ГБ ради обычного
 #          закрытия KiCad незачем
+#   v3.3 — разбор дампов переведён с глоба по папке (mtime после чьего-то exit)
+#          на чтение СОБСТВЕННОГО лога каждого PID (Dump N initiated/complete):
+#          недописанный дамп одного процесса больше не уходит в cdb из-за
+#          чужого завершения; добавлен триггер -h (зависшее окно) для GUI
 
 [CmdletBinding()]
 param(
@@ -211,7 +215,7 @@ if (Test-Path $lockFile) {
 }
 Set-Content -Path $lockFile -Value $PID
 
-Log "hunt-proc v3.1 запущен (PID $PID). конфиг: $(if (Test-Path $ConfigPath) {$ConfigPath} else {'<нет, дефолты>'})"
+Log "hunt-proc v3.3 запущен (PID $PID). конфиг: $(if (Test-Path $ConfigPath) {$ConfigPath} else {'<нет, дефолты>'})"
 Log "procdump: $procdump; cdb: $(if ($cdb) {$cdb} else {'нет'}); тип дампов: $DumpType ($dumpTypeArg)"
 Log "процессы: $($ProcessNames -join ', '); фильтры: $($ExceptionFilters -join ', '); дампы: $DumpDir"
 
@@ -241,11 +245,11 @@ if ($orphans) {
 
 # ---------------------------------------------------------------- hunt loop
 
-$hunted = @{}   # pid -> @{ Proc; Log }
+$hunted = @{}    # pid -> @{ Proc; Log; Name }
+$submitted = @{} # путь дампа -> $true — уже отправлен на анализ (не разбираем дважды)
 $filterArgs = @()
 foreach ($f in $ExceptionFilters) { $filterArgs += @("-f", $f) }
 
-$hunterStart = Get-Date
 $lastBeat = Get-Date
 while ($true) {
   try {
@@ -261,15 +265,18 @@ while ($true) {
         if ($hunted.ContainsKey($p)) { continue }
         $pName = $proc0.ProcessName
         $pdLog = Join-Path $DumpDir "procdump_${pName}_$p.txt"
+        # -e/-t/-h: first-chance исключения, завершение процесса, зависшее
+        # окно (-h — тот же механизм, которым Windows видит "Не отвечает").
         $pdArgs = @("-accepteula", $dumpTypeArg, "-e", "1") + $filterArgs +
-                  @("-t", "-n", $MaxDumpsPerAttach, $p, $DumpDir)
+                  @("-h", "-t", "-n", $MaxDumpsPerAttach, $p, $DumpDir)
         $proc = Start-Process -FilePath $procdump -ArgumentList $pdArgs `
                 -NoNewWindow -PassThru -RedirectStandardOutput $pdLog
         $hunted[$p] = @{ Proc = $proc; Log = $pdLog; Name = $pName }
         Log "прицепился к $pName.exe PID $p (procdump PID $($proc.Id))"
     }
 
-    # 2. Кто из procdump'ов завершился — разобрать и вскрыть свежие дампы
+    # 2. Кто из procdump'ов завершился — показать хвост лога и подсчитать
+    #    дампы от ЧИСТОГО завершения (Exit Code 0), которые не идут в cdb.
     $done = @($hunted.Keys | Where-Object { $hunted[$_].Proc.HasExited })
     $skipDumps = @{}   # путь -> $true — дампы от чистого завершения (Exit 0), не анализируем
     foreach ($p in $done) {
@@ -295,26 +302,45 @@ while ($true) {
                 Where-Object { $_.LineNumber -gt $exitMatch.LineNumber } |
                 ForEach-Object { $skipDumps[$_.Matches[0].Groups[1].Value.Trim()] = $true }
         }
-        $hunted.Remove($p)
     }
-    if ($done.Count -gt 0) {
-        Start-Sleep -Seconds 2
-        $fresh = Get-ChildItem $DumpDir -Filter "*.dmp" -ErrorAction SilentlyContinue |
-                 Where-Object { $_.LastWriteTime -gt $hunterStart -and
-                                -not (Test-Path "$($_.FullName).analysis.txt") -and
-                                -not $analysisJobs.ContainsKey($_.FullName) } |
-                 Sort-Object LastWriteTime
-        foreach ($d in $fresh) {
-            if ($skipDumps.ContainsKey($d.FullName)) {
-                Log "  чистое завершение (Exit 0) — дамп без анализа, удаляю: $($d.Name)"
-                Remove-Item $d.FullName -Force -ErrorAction SilentlyContinue
+
+    # 3. Разбор дампов КАЖДОГО подколпачного PID (включая только что
+    #    отцепившихся — они ещё в $hunted на этой итерации) по ЕГО
+    #    СОБСТВЕННОМУ логу, а не по глобу всей папки по времени изменения.
+    #    Старый глоб (Start-Sleep 2 + Get-ChildItem $DumpDir по mtime)
+    #    срабатывал только при ЧЬЁМ-ТО exit и мог поймать недописанный дамп
+    #    ДРУГОГО, ещё живого процесса (2026-08-21: cdb открыл
+    #    kicad.exe_260821_210426.dmp на середине записи). Путь даёт строка
+    #    "Dump N initiated: <path>", готовность файла — "Dump N complete";
+    #    сопоставляем по номеру N.
+    foreach ($p in @($hunted.Keys)) {
+        $logLines = @(Get-Content $hunted[$p].Log -Encoding Unicode -ErrorAction SilentlyContinue)
+        $initiated = @{}   # N -> путь дампа из строк "Dump N initiated: <path>"
+        $logLines | Select-String 'Dump (\d+) initiated:\s*(.+\.dmp)' | ForEach-Object {
+            $initiated[$_.Matches[0].Groups[1].Value] = $_.Matches[0].Groups[2].Value.Trim()
+        }
+        $completeNums = @($logLines | Select-String 'Dump (\d+) complete' |
+                          ForEach-Object { $_.Matches[0].Groups[1].Value })
+        foreach ($n in $completeNums) {
+            if (-not $initiated.ContainsKey($n)) { continue }
+            $path = $initiated[$n]
+            if ($submitted.ContainsKey($path) -or $analysisJobs.ContainsKey($path)) { continue }
+            if ($skipDumps.ContainsKey($path)) {
+                Log "  чистое завершение (Exit 0) — дамп без анализа, удаляю: $([IO.Path]::GetFileName($path))"
+                Remove-Item $path -Force -ErrorAction SilentlyContinue
                 continue
             }
-            Start-DumpAnalysis $d.FullName
+            $submitted[$path] = $true
+            Start-DumpAnalysis $path
         }
     }
 
-    # 3. Собрать готовые фоновые вскрытия
+    # 4. Убрать отцепившихся из бухгалтерии (кого продолжать пытаться
+    #    подцепить заново). Удаляем ПОСЛЕ шага 3: их последний дамп по -t уже
+    #    в логе и должен успеть уйти на анализ.
+    foreach ($p in $done) { $hunted.Remove($p) }
+
+    # 5. Собрать готовые фоновые вскрытия
     $finished = @($analysisJobs.Keys | Where-Object { $analysisJobs[$_].State -ne 'Running' })
     foreach ($dmp in $finished) {
         Receive-Job $analysisJobs[$dmp] -ErrorAction SilentlyContinue | Out-Null

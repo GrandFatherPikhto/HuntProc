@@ -7,7 +7,7 @@ A universal script for automatically collecting memory dumps and analyzing crash
 ## Features
 
 - **Multi-process** — watches several applications at once (list in the config).
-- **Flexible exception filters** — catches first-chance exceptions (AV, fastfail, breakpoint, etc.) and process termination (`-t`).
+- **Flexible exception filters** — catches first-chance exceptions (AV, fastfail, breakpoint, etc.), process termination (`-t`) and a hung (not-responding) window (`-h`).
 - **Background auto-analysis** — each fresh dump is processed by `cdb.exe` in a separate background job (`Start-Job`) without blocking the main loop.
 - **Full or mini dump** — your choice: `-ma` (full memory, gigabytes) or `-mp` (stacks/registers only, tens of MB — convenient for GitLab/email attachments).
 - **Symbol support** — several symbol servers (Microsoft, KiCad, any others); shared cache.
@@ -133,6 +133,7 @@ Or via the `taskschd.msc` snap-in.
    - `-e 1` — first-chance exceptions
    - `-f` — exception code filters
    - `-t` — dump on termination (including a "silent" exit)
+   - `-h` — dump if the process has a hung window (does not respond to window messages for at least 5 seconds)
    - `-n N` — dump count limit
    - `-ma` or `-mp` — dump type
 3. `procdump` writes dumps to `DumpDir` and keeps its log in `procdump_<process>_<PID>.txt`.
