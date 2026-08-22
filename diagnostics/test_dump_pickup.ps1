@@ -1,11 +1,14 @@
-# test_dump_pickup.ps1 -- regression test for hunt-proc.ps1 v3.3 dump pickup.
+# test_dump_pickup.ps1 -- regression test for hunt-proc.ps1 v3.5 dump pickup / flags.
 #
-# Covers (see techdocs/handoff_2026_08_22_hang_trigger_and_dump_race_fix.md, Part 1):
+# Covers (see techdocs/handoff_2026_08_22_hang_trigger_and_dump_race_fix.md, Part 1,
+# and techdocs/handoff_2026_08_22_dump_on_termination_flag.md):
 #   1. A dump that has "Dump N initiated" but no "Dump N complete" yet (file is
 #      still being written by a live procdump) must NOT be submitted for analysis.
 #   2. A dump with both lines (initiated + complete) must be submitted.
 #   3. $submitted must prevent submitting the same dump twice.
 #   4. (Part 2) "-h" must be present in the $pdArgs assembly in hunt-proc.ps1.
+#   5. (Part 3) "-t" is conditional on $DumpOnTermination: absent by default,
+#      present only when the flag is $true.
 #
 # The algorithm below mirrors the "3. Parse dumps of EVERY tracked PID" section
 # of hunt-proc.ps1 (map "Dump N initiated: <path>" -> {N: path}; "Dump N
@@ -81,17 +84,39 @@ $logMixed = @(
 $got = @(Get-CompletedDumpPaths $logMixed $submitted)
 Assert-Equal $got @("D:\tmp\kicad.exe_C.dmp") "from a mixed log only the completed dump is submitted"
 
-# ---- Test 5 (Part 2): '-h' is present in the $pdArgs assembly
+# ---- Test 5 (Part 2 + Part 3): '-h' present AND '-t' conditional in $pdArgs
 $src = Get-Content (Join-Path $PSScriptRoot "..\hunt-proc.ps1") -Raw
-$m = [regex]::Match(
+$hasH = [regex]::IsMatch(
     $src,
-    '(?m)\$pdArgs\s*=\s*@\("-accepteula",\s*\$dumpTypeArg,\s*"-e",\s*"1"\)\s*\+\s*\$filterArgs\s*\+\s*\r?\n\s*@\(([^\)]*)\)'
+    '(?m)\$pdArgs\s*=\s*@\("-accepteula",\s*\$dumpTypeArg,\s*"-e",\s*"1"\)\s*\+\s*\$filterArgs\s*\+\s*@\("-h"\)'
 )
-if ($m.Success -and $m.Groups[1].Value -match '"-h"') {
-    Write-Host "PASS: '-h' (hung-window trigger) present in `$pdArgs" -ForegroundColor Green
+$hasConditionalT = [regex]::IsMatch(
+    $src,
+    '(?m)if\s*\(\$DumpOnTermination\)\s*\{\s*\$pdArgs\s*\+=\s*"-t"\s*\}'
+)
+if ($hasH -and $hasConditionalT) {
+    Write-Host "PASS: '-h' present and '-t' conditional on `$DumpOnTermination in `$pdArgs" -ForegroundColor Green
 } else {
     $script:failed++
-    Write-Host "FAIL: '-h' NOT found in `$pdArgs assembly" -ForegroundColor Red
+    Write-Host "FAIL: '-h'/conditional '-t' not found in `$pdArgs assembly (hasH=$hasH, conditionalT=$hasConditionalT)" -ForegroundColor Red
+}
+
+# ---- Test 6 (Part 3): modeled $pdArgs assembly — -t off by default, on when requested
+function Build-PdArgs($DumpOnTermination) {
+    # mirrors the hunt-proc.ps1 $pdArgs assembly for one attach
+    $filterArgs = @("-f", "C0000005")
+    $pdArgs = @("-accepteula", "-ma", "-e", "1") + $filterArgs + @("-h")
+    if ($DumpOnTermination) { $pdArgs += "-t" }
+    $pdArgs += @("-n", 5, 1234, "D:\tmp")
+    return $pdArgs
+}
+$off = @(Build-PdArgs $false)
+$on  = @(Build-PdArgs $true)
+if ($off -notcontains "-t" -and $on -contains "-t") {
+    Write-Host "PASS: -t absent when `$DumpOnTermination=`$false, present when `$true" -ForegroundColor Green
+} else {
+    $script:failed++
+    Write-Host "FAIL: -t not conditional on `$DumpOnTermination (off has -t: $($off -contains '-t'), on has -t: $($on -contains '-t'))" -ForegroundColor Red
 }
 
 Write-Host ""

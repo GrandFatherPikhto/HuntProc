@@ -7,7 +7,7 @@ A universal script for automatically collecting memory dumps and analyzing crash
 ## Features
 
 - **Multi-process** — watches several applications at once (list in the config).
-- **Flexible exception filters** — catches first-chance exceptions (AV, fastfail, breakpoint, etc.), process termination (`-t`) and a hung (not-responding) window (`-h`).
+- **Flexible exception filters** — catches first-chance exceptions (AV, fastfail, breakpoint, etc.) and a hung (not-responding) window (`-h`), plus — optionally, via the config flag `DumpOnTermination` (default off) — process termination (`-t`).
 - **Background auto-analysis** — each fresh dump is processed by `cdb.exe` in a separate background job (`Start-Job`) without blocking the main loop.
 - **Full or mini dump** — your choice: `-ma` (full memory, gigabytes) or `-mp` (stacks/registers only, tens of MB — convenient for GitLab/email attachments).
 - **Symbol support** — several symbol servers (Microsoft, KiCad, any others); shared cache.
@@ -118,6 +118,7 @@ Or via the `taskschd.msc` snap-in.
 | `CdbPath` | `string` | Full path to `cdb.exe`. If empty, auto-search. |
 | `ExceptionFilters` | `string[]` | HEX exception codes that `procdump` reacts to (first-chance). |
 | `MaxDumpsPerAttach` | `int` | How many dumps may be created per process-monitoring session. |
+| `DumpOnTermination` | `bool` | Dump on ANY process termination, not only crashes/hangs (default `false`). |
 | `DumpType` | `string` | `Full` (complete dump, `-ma`) or `Mini` (stacks and registers only, `-mp`). |
 | `OrphanMaxAgeHours` | `int` | Dumps older than this many hours are considered "old" and are not analyzed at startup. |
 | `SymbolServers` | `string[]` | List of symbol servers (`srv*<URL>` format). The `SymbolCache` cache is added automatically. |
@@ -132,7 +133,7 @@ Or via the `taskschd.msc` snap-in.
 2. For each new process it launches a separate `procdump` instance with the flags:
    - `-e 1` — first-chance exceptions
    - `-f` — exception code filters
-   - `-t` — dump on termination (including a "silent" exit)
+   - `-t` — dump on any termination (including a "silent" exit); OFF by default, enabled via the config flag `DumpOnTermination`
    - `-h` — dump if the process has a hung window (does not respond to window messages for at least 5 seconds)
    - `-n N` — dump count limit
    - `-ma` or `-mp` — dump type

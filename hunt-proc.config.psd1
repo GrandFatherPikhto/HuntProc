@@ -24,6 +24,12 @@
     # How many dumps procdump writes without detaching
     MaxDumpsPerAttach = 5
 
+    # Write a dump on ANY process termination, including a clean exit (not
+    # just crashes/hangs). Off by default: right now we only care about
+    # crashes and hangs, not normal closes. Flip to $true if a later
+    # investigation needs a snapshot of a normal-exit state too.
+    DumpOnTermination = $false
+
     # Full: -ma, whole memory (gigabytes; for local analysis)
     # Mini: -mp, stacks+registers (tens of MB; fits into a GitLab attachment)
     DumpType          = 'Full'

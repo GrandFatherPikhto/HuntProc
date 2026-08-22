@@ -1,4 +1,4 @@
-﻿# hunt-proc.ps1 (v3.4) — process death hunter (default: kicad.exe).
+﻿# hunt-proc.ps1 (v3.5) — process death hunter (default: kicad.exe).
 #
 # What it does:
 #   - attaches ProcDump to EVERY instance of the tracked processes
@@ -38,6 +38,11 @@
 #          (hung window) for GUI apps
 #   v3.4 — added -Stop mode: stops the hunter by the PID from hunter.lock
 #          (fixes "second run not needed" without hunting for the process)
+#   v3.5 — -t (dump on ANY termination) is no longer hardcoded: now an
+#          explicit DumpOnTermination flag (bool, default $false, resolved
+#          CLI > config > default) so normal clean exits are not dumped at
+#          all, not just deleted afterwards. Exit-0 skip logic kept as a
+#          harmless no-op for when the flag is flipped back on.
 
 [CmdletBinding()]
 param(
@@ -54,6 +59,7 @@ param(
     [string[]]$ExceptionFilters = $null,
     [int]$MaxDumpsPerAttach = -1,
     [string]$DumpType = "",          # Full | Mini
+    [Nullable[bool]]$DumpOnTermination = $null,  # dump on ANY termination, not just crashes/hangs
     [int]$OrphanMaxAgeHours = -1,
     [string[]]$ProcessNames = $null  # process names WITHOUT .exe, e.g. kicad,freecad
 )
@@ -71,6 +77,8 @@ $defaults = @{
     CdbPath           = ""
     ExceptionFilters  = @("C0000005", "C0000409", "80000003")
     MaxDumpsPerAttach = 5
+    DumpOnTermination  = $false     # dump on ANY termination, incl. clean exit; off by default —
+                                    # right now we only want crashes/hangs, not normal closes
     DumpType          = "Full"      # Full: -ma (gigabytes, whole memory)
                                     # Mini: -mp (tens of MB, stacks+registers —
                                     #       fits into a GitLab attachment)
@@ -108,6 +116,11 @@ $MaxDumpsPerAttach = Resolve-Setting $MaxDumpsPerAttach 'MaxDumpsPerAttach' -1
 $DumpType          = Resolve-Setting $DumpType          'DumpType'          ""
 $OrphanMaxAgeHours = Resolve-Setting $OrphanMaxAgeHours 'OrphanMaxAgeHours' -1
 $ProcessNames      = Resolve-Setting $ProcessNames      'ProcessNames'      $null
+# bool needs $null to mean "not set" ($false is a valid value), so it cannot
+# go through Resolve-Setting's string sentinel — resolve it explicitly.
+$DumpOnTermination = if ($null -ne $DumpOnTermination) { $DumpOnTermination }
+                     elseif ($config.ContainsKey('DumpOnTermination')) { [bool]$config.DumpOnTermination }
+                     else { $defaults.DumpOnTermination }
 $symbolServers     = if ($config.ContainsKey('SymbolServers')) { $config.SymbolServers }
                      else { $defaults.SymbolServers }
 
@@ -246,9 +259,9 @@ if (Test-Path $lockFile) {
 }
 Set-Content -Path $lockFile -Value $PID
 
-Log "hunt-proc v3.4 started (PID $PID). config: $(if (Test-Path $ConfigPath) {$ConfigPath} else {'<none, defaults>'})"
+Log "hunt-proc v3.5 started (PID $PID). config: $(if (Test-Path $ConfigPath) {$ConfigPath} else {'<none, defaults>'})"
 Log "procdump: $procdump; cdb: $(if ($cdb) {$cdb} else {'none'}); dump type: $DumpType ($dumpTypeArg)"
-Log "processes: $($ProcessNames -join ', '); filters: $($ExceptionFilters -join ', '); dumps: $DumpDir"
+Log "processes: $($ProcessNames -join ', '); filters: $($ExceptionFilters -join ', '); dump-on-termination: $DumpOnTermination; dumps: $DumpDir"
 
 # ---------------------------------------------------------------- jobs
 
@@ -296,10 +309,13 @@ while ($true) {
         if ($hunted.ContainsKey($p)) { continue }
         $pName = $proc0.ProcessName
         $pdLog = Join-Path $DumpDir "procdump_${pName}_$p.txt"
-        # -e/-t/-h: first-chance exceptions, process termination, hung window
-        # (-h — the same mechanism Windows uses to report "Not responding").
-        $pdArgs = @("-accepteula", $dumpTypeArg, "-e", "1") + $filterArgs +
-                  @("-h", "-t", "-n", $MaxDumpsPerAttach, $p, $DumpDir)
+        # -e/-h: first-chance exceptions, hung window (-h — the same mechanism
+        # Windows uses to report "Not responding"). -t (dump on ANY termination)
+        # is conditional: only when $DumpOnTermination is $true, otherwise a
+        # clean exit would write gigabytes for nothing.
+        $pdArgs = @("-accepteula", $dumpTypeArg, "-e", "1") + $filterArgs + @("-h")
+        if ($DumpOnTermination) { $pdArgs += "-t" }
+        $pdArgs += @("-n", $MaxDumpsPerAttach, $p, $DumpDir)
         $proc = Start-Process -FilePath $procdump -ArgumentList $pdArgs `
                 -NoNewWindow -PassThru -RedirectStandardOutput $pdLog
         $hunted[$p] = @{ Proc = $proc; Log = $pdLog; Name = $pName }
