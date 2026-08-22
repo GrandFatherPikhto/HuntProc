@@ -16,6 +16,7 @@
 #   hunt-proc.ps1                        — охота (основной)
 #   hunt-proc.ps1 -Analyze путь.dmp      — ручное вскрытие одного дампа
 #   hunt-proc.ps1 -Install / -Uninstall  — автостарт как Scheduled Task
+#   hunt-proc.ps1 -Stop                  — остановить работающего охотника (по hunter.lock)
 #
 # История боевых правок:
 #   v2   — мульти-PID; procdump/cdb пишут в файлы сами (кодировки)
@@ -34,12 +35,15 @@
 #          на чтение СОБСТВЕННОГО лога каждого PID (Dump N initiated/complete):
 #          недописанный дамп одного процесса больше не уходит в cdb из-за
 #          чужого завершения; добавлен триггер -h (зависшее окно) для GUI
+#   v3.4 — добавлен режим -Stop: останавливает охотника по PID из hunter.lock
+#          (лечит "второй запуск не нужен" без ручного поиска процесса)
 
 [CmdletBinding()]
 param(
     [string]$Analyze = "",
     [switch]$Install,
     [switch]$Uninstall,
+    [switch]$Stop,
     # Всё ниже можно задать в конфиге; параметр перекрывает конфиг
     [string]$ConfigPath = "",
     [string]$DumpDir = "",
@@ -149,6 +153,32 @@ if ($Uninstall) {
     return
 }
 
+# ---------------------------------------------------------------- stop
+
+if ($Stop) {
+    $lockFile = Join-Path $DumpDir "hunter.lock"
+    if (-not (Test-Path $lockFile)) {
+        Write-Host "Lock-файл не найден — охотник, похоже, не запущен."
+        return
+    }
+    $oldPid = Get-Content $lockFile -ErrorAction SilentlyContinue
+    $proc = if ($oldPid) { Get-Process -Id $oldPid -ErrorAction SilentlyContinue } else { $null }
+    if (-not $proc) {
+        Write-Host "PID $oldPid из lock-файла уже не существует, просто убираю lock-файл."
+        Remove-Item $lockFile -Force
+        return
+    }
+    try {
+        Stop-Process -Id $oldPid -Force -ErrorAction Stop
+        Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
+        Write-Host "Охотник (PID $oldPid) остановлен."
+    } catch {
+        Write-Host "Не удалось остановить PID $oldPid`: $($_.Exception.Message)"
+        Write-Host "Если охотник запущен в elevated-окне — останови его оттуда же (запусти -Stop от администратора)."
+    }
+    return
+}
+
 # ---------------------------------------------------------------- tools
 
 New-Item -ItemType Directory -Force -Path $DumpDir, $SymbolCache | Out-Null
@@ -215,7 +245,7 @@ if (Test-Path $lockFile) {
 }
 Set-Content -Path $lockFile -Value $PID
 
-Log "hunt-proc v3.3 запущен (PID $PID). конфиг: $(if (Test-Path $ConfigPath) {$ConfigPath} else {'<нет, дефолты>'})"
+Log "hunt-proc v3.4 запущен (PID $PID). конфиг: $(if (Test-Path $ConfigPath) {$ConfigPath} else {'<нет, дефолты>'})"
 Log "procdump: $procdump; cdb: $(if ($cdb) {$cdb} else {'нет'}); тип дампов: $DumpType ($dumpTypeArg)"
 Log "процессы: $($ProcessNames -join ', '); фильтры: $($ExceptionFilters -join ', '); дампы: $DumpDir"
 
