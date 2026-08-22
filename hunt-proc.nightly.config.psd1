@@ -1,23 +1,23 @@
-﻿# hunt-proc.nightly.config.psd1 — тот же охотник, но с символами KiCad
-# nightly-канала (https://symbols.kicad.org/kicad-nightly).
+﻿# hunt-proc.nightly.config.psd1 — the same hunter, but with KiCad
+# nightly-channel symbols (https://symbols.kicad.org/kicad-nightly).
 #
-# Зачем отдельный конфиг: symbols.kicad.org отдаёт РАЗНЫЕ наборы символов
-# по разным каналам (kicad-stable бывает только export-символами, а
-# testing/nightly — полноценные приватные PDB), поэтому у каждого канала
-# свой изолированный SymbolCache, чтобы PDB с одинаковым именем модуля,
-# но разным содержимым не смешивались в одном кэше.
+# Why a separate config: symbols.kicad.org serves DIFFERENT symbol sets per
+# channel (kicad-stable is only export symbols, while testing/nightly have
+# full private PDBs), so each channel gets its own isolated SymbolCache so
+# that PDBs with the same module name but different content do not mix in a
+# single cache.
 #
-# Использование (ручной разбор уже существующего дампа этим каналом):
-#   powershell -File hunt-proc.ps1 -ConfigPath hunt-proc.nightly.config.psd1 -Analyze <путь-к-дампу>
+# Usage (manual analysis of an existing dump with this channel):
+#   powershell -File hunt-proc.ps1 -ConfigPath hunt-proc.nightly.config.psd1 -Analyze <path-to-dump>
 #
-# DumpDir/ProcessNames/ExceptionFilters и т.д. те же, что в основном конфиге
-# (не нужны для -Analyze, но держим на случай если этим же конфигом захочется
-# погонять и боевую охоту на nightly-символах).
+# DumpDir/ProcessNames/ExceptionFilters etc. are the same as in the main
+# config (not needed for -Analyze, but kept in case you want to run real
+# hunting on nightly symbols with this config too).
 @{
     ProcessNames      = @('kicad')
     DumpDir           = 'D:\Projects\WinDbg\KiCad'
 
-    # Отдельный кэш под nightly — не мешаем с другими каналами.
+    # A dedicated nightly cache — keep it separate from other channels.
     SymbolCache       = 'D:\Projects\WinDbg\KiCad\nightly'
 
     ProcDumpPath      = 'D:\Utils\ProcDump.exe'

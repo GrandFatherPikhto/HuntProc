@@ -1,23 +1,23 @@
-﻿# hunt-proc.testing.config.psd1 — тот же охотник, но с символами KiCad
-# testing-канала (https://symbols.kicad.org/kicad-testing).
+﻿# hunt-proc.testing.config.psd1 — the same hunter, but with KiCad
+# testing-channel symbols (https://symbols.kicad.org/kicad-testing).
 #
-# Зачем отдельный конфиг: symbols.kicad.org отдаёт РАЗНЫЕ наборы символов
-# по разным каналам — kicad-stable оказался только export-символами для
-# kicad.exe 10.0.6.50856, а на testing лежат настоящие приватные PDB.
-# У каждого канала свой изолированный SymbolCache, чтобы PDB с одинаковым
-# именем модуля, но разным содержимым не смешивались в одном кэше.
+# Why a separate config: symbols.kicad.org serves DIFFERENT symbol sets per
+# channel — kicad-stable turned out to be only export symbols for
+# kicad.exe 10.0.6.50856, while testing hosts real private PDBs.
+# Each channel has its own isolated SymbolCache so that PDBs with the same
+# module name but different content do not mix in a single cache.
 #
-# Использование (ручной разбор уже существующего дампа этим каналом):
-#   powershell -File hunt-proc.ps1 -ConfigPath hunt-proc.testing.config.psd1 -Analyze <путь-к-дампу>
+# Usage (manual analysis of an existing dump with this channel):
+#   powershell -File hunt-proc.ps1 -ConfigPath hunt-proc.testing.config.psd1 -Analyze <path-to-dump>
 #
-# DumpDir/ProcessNames/ExceptionFilters и т.д. те же, что в основном конфиге
-# (не нужны для -Analyze, но держим на случай если этим же конфигом захочется
-# погонять и боевую охоту на testing-символах).
+# DumpDir/ProcessNames/ExceptionFilters etc. are the same as in the main
+# config (not needed for -Analyze, but kept in case you want to run real
+# hunting on testing symbols with this config too).
 @{
     ProcessNames      = @('kicad')
     DumpDir           = 'D:\Projects\WinDbg\KiCad'
 
-    # Отдельный кэш под testing — не мешаем с другими каналами.
+    # A dedicated testing cache — keep it separate from other channels.
     SymbolCache       = 'D:\Projects\WinDbg\KiCad\testing'
 
     ProcDumpPath      = 'D:\Utils\ProcDump.exe'

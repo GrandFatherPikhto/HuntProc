@@ -1,42 +1,43 @@
-﻿# hunt-proc.ps1 (v3.3) — охотник за смертями процессов (по умолчанию kicad.exe).
+﻿# hunt-proc.ps1 (v3.4) — process death hunter (default: kicad.exe).
 #
-# Что умеет:
-#   - цепляет ProcDump к КАЖДОМУ инстансу отслеживаемых процессов
-#     (ProcessNames в конфиге, по умолчанию kicad; новые — на лету);
-#     дамп пишется на first-chance исключениях фатальных кодов и на
-#     завершении процесса (тихий выход тоже даёт снимок)
-#   - вскрывает дампы cdb'ом В ФОНЕ (!analyze -v + стек с символами KiCad),
-#     кладёт <дамп>.analysis.txt и печатает вердикт в лог
-#   - при старте подбирает НЕВСКРЫТЫЕ дампы прошлых сессий (сироты после
-#     убитого охотника) и вскрывает их тоже
-#   - настройки в hunt-proc.config.psd1 рядом со скриптом;
-#     приоритет: параметры командной строки > конфиг > дефолты
+# What it does:
+#   - attaches ProcDump to EVERY instance of the tracked processes
+#     (ProcessNames in the config, default: kicad; new ones are picked up
+#     on the fly); a dump is written on first-chance exceptions of fatal
+#     codes and on process termination (a silent exit also yields a snapshot)
+#   - opens dumps with cdb IN THE BACKGROUND (!analyze -v + KiCad symbol
+#     stack), writes <dump>.analysis.txt and prints the verdict to the log
+#   - at startup it picks up UNOPENED dumps from previous sessions (orphans
+#     left behind by a killed hunter) and opens those too
+#   - settings live in hunt-proc.config.psd1 next to the script;
+#     precedence: command-line parameters > config > defaults
 #
-# Режимы:
-#   hunt-proc.ps1                        — охота (основной)
-#   hunt-proc.ps1 -Analyze путь.dmp      — ручное вскрытие одного дампа
-#   hunt-proc.ps1 -Install / -Uninstall  — автостарт как Scheduled Task
-#   hunt-proc.ps1 -Stop                  — остановить работающего охотника (по hunter.lock)
+# Modes:
+#   hunt-proc.ps1                        — hunt (main)
+#   hunt-proc.ps1 -Analyze path.dmp      — manually open a single dump
+#   hunt-proc.ps1 -Install / -Uninstall  — autostart as a Scheduled Task
+#   hunt-proc.ps1 -Stop                  — stop a running hunter (via hunter.lock)
 #
-# История боевых правок:
-#   v2   — мульти-PID; procdump/cdb пишут в файлы сами (кодировки)
-#   v2.1 — $pdArgs вместо $args; try/catch цикла; heartbeat; lock-файл
-#   v2.2 — анализ в фоновых job'ах (цикл не слепнет); только свежие дампы
-#   v3.0 — конфиг-файл; подбор дампов-сирот при старте; режим -Analyze;
-#          выбор Full/Mini дампов (мини влезают во вложения GitLab)
-#   v3.1 — ProcessNames в конфиге: охота на любые процессы, не только kicad
-#   v3.2 — дефолтное имя конфига поправлено на реальное (hunt-proc.config.psd1,
-#          было hunt-proc_config.psd1 — подчёркивание вместо точки, конфиг
-#          молча не находился); дампы чистого завершения (Exit Code 0) больше
-#          не идут на cdb-анализ и сразу удаляются — ProcDump сам не умеет
-#          фильтровать -t по коду выхода, но держать 3+ ГБ ради обычного
-#          закрытия KiCad незачем
-#   v3.3 — разбор дампов переведён с глоба по папке (mtime после чьего-то exit)
-#          на чтение СОБСТВЕННОГО лога каждого PID (Dump N initiated/complete):
-#          недописанный дамп одного процесса больше не уходит в cdb из-за
-#          чужого завершения; добавлен триггер -h (зависшее окно) для GUI
-#   v3.4 — добавлен режим -Stop: останавливает охотника по PID из hunter.lock
-#          (лечит "второй запуск не нужен" без ручного поиска процесса)
+# Battle history:
+#   v2   — multi-PID; procdump/cdb write to files themselves (encodings)
+#   v2.1 — $pdArgs instead of $args; try/catch loop; heartbeat; lock file
+#   v2.2 — analysis in background jobs (loop does not block); fresh dumps only
+#   v3.0 — config file; pickup of orphan dumps at startup; -Analyze mode;
+#          Full/Mini dump choice (mini fits into GitLab attachments)
+#   v3.1 — ProcessNames in the config: hunt any process, not just kicad
+#   v3.2 — default config name fixed to the real one (hunt-proc.config.psd1,
+#          was hunt-proc_config.psd1 — underscore instead of a dot, the config
+#          was silently not found); clean-termination dumps (Exit Code 0) no
+#          longer go to cdb analysis and are deleted right away — ProcDump
+#          itself cannot filter -t by exit code, and keeping 3+ GB for a
+#          regular KiCad close is pointless
+#   v3.3 — dump pickup switched from a directory glob (mtime after someone
+#          else's exit) to reading EACH PID's own log (Dump N
+#          initiated/complete): a half-written dump of one process no longer
+#          reaches cdb because of another one finishing; added the -h trigger
+#          (hung window) for GUI apps
+#   v3.4 — added -Stop mode: stops the hunter by the PID from hunter.lock
+#          (fixes "second run not needed" without hunting for the process)
 
 [CmdletBinding()]
 param(
@@ -44,7 +45,7 @@ param(
     [switch]$Install,
     [switch]$Uninstall,
     [switch]$Stop,
-    # Всё ниже можно задать в конфиге; параметр перекрывает конфиг
+    # Everything below can be set in the config; a parameter overrides the config
     [string]$ConfigPath = "",
     [string]$DumpDir = "",
     [string]$SymbolCache = "",
@@ -54,7 +55,7 @@ param(
     [int]$MaxDumpsPerAttach = -1,
     [string]$DumpType = "",          # Full | Mini
     [int]$OrphanMaxAgeHours = -1,
-    [string[]]$ProcessNames = $null  # имена процессов БЕЗ .exe, напр. kicad,freecad
+    [string[]]$ProcessNames = $null  # process names WITHOUT .exe, e.g. kicad,freecad
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,10 +71,10 @@ $defaults = @{
     CdbPath           = ""
     ExceptionFilters  = @("C0000005", "C0000409", "80000003")
     MaxDumpsPerAttach = 5
-    DumpType          = "Full"      # Full: -ma (гигабайты, вся память)
-                                    # Mini: -mp (десятки МБ, стеки+регистры —
-                                    #       влезает во вложение GitLab)
-    OrphanMaxAgeHours = 24          # дампы-сироты старше — не трогаем
+    DumpType          = "Full"      # Full: -ma (gigabytes, whole memory)
+                                    # Mini: -mp (tens of MB, stacks+registers —
+                                    #       fits into a GitLab attachment)
+    OrphanMaxAgeHours = 24          # orphan dumps older than this — leave alone
     SymbolServers     = @(
         "srv*https://msdl.microsoft.com/download/symbols",
         "srv*https://symbols.kicad.org/kicad-stable"
@@ -81,18 +82,18 @@ $defaults = @{
 }
 
 if (-not (Test-Path $ConfigPath)) {
-    Write-Host "ВНИМАНИЕ: конфиг $ConfigPath не найден — работаю на дефолтах" -ForegroundColor Yellow
+    Write-Host "WARNING: config $ConfigPath not found — running on defaults" -ForegroundColor Yellow
 }
 
 if (-not $ConfigPath) { $ConfigPath = Join-Path $PSScriptRoot "hunt-proc.config.psd1" }
 $config = @{}
 if (Test-Path $ConfigPath) {
     try { $config = Import-PowerShellDataFile $ConfigPath }
-    catch { Write-Host "ВНИМАНИЕ: конфиг $ConfigPath не читается: $($_.Exception.Message)" }
+    catch { Write-Host "WARNING: config $ConfigPath cannot be read: $($_.Exception.Message)" }
 }
 
 function Resolve-Setting($cliValue, $key, $emptyValue) {
-    # приоритет: CLI > конфиг > дефолт. $emptyValue — признак "CLI не задан"
+    # precedence: CLI > config > default. $emptyValue marks "CLI not set"
     if ($null -ne $cliValue -and "$cliValue" -ne "$emptyValue") { return $cliValue }
     if ($config.ContainsKey($key)) { return $config[$key] }
     return $defaults[$key]
@@ -144,12 +145,12 @@ if ($Install) {
         -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Settings $settings -RunLevel Highest -Force | Out-Null
-    Write-Host "Задача '$TaskName' создана (настройки возьмутся из конфига)."
+    Write-Host "Task '$TaskName' created (settings will be read from the config)."
     return
 }
 if ($Uninstall) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Host "Задача '$TaskName' удалена."
+    Write-Host "Task '$TaskName' removed."
     return
 }
 
@@ -158,23 +159,23 @@ if ($Uninstall) {
 if ($Stop) {
     $lockFile = Join-Path $DumpDir "hunter.lock"
     if (-not (Test-Path $lockFile)) {
-        Write-Host "Lock-файл не найден — охотник, похоже, не запущен."
+        Write-Host "Lock file not found — the hunter does not seem to be running."
         return
     }
     $oldPid = Get-Content $lockFile -ErrorAction SilentlyContinue
     $proc = if ($oldPid) { Get-Process -Id $oldPid -ErrorAction SilentlyContinue } else { $null }
     if (-not $proc) {
-        Write-Host "PID $oldPid из lock-файла уже не существует, просто убираю lock-файл."
+        Write-Host "PID $oldPid from the lock file no longer exists, just removing the lock file."
         Remove-Item $lockFile -Force
         return
     }
     try {
         Stop-Process -Id $oldPid -Force -ErrorAction Stop
         Remove-Item $lockFile -Force -ErrorAction SilentlyContinue
-        Write-Host "Охотник (PID $oldPid) остановлен."
+        Write-Host "Hunter (PID $oldPid) stopped."
     } catch {
-        Write-Host "Не удалось остановить PID $oldPid`: $($_.Exception.Message)"
-        Write-Host "Если охотник запущен в elevated-окне — останови его оттуда же (запусти -Stop от администратора)."
+        Write-Host "Failed to stop PID $oldPid`: $($_.Exception.Message)"
+        Write-Host "If the hunter runs in an elevated window, stop it from there (run -Stop as administrator)."
     }
     return
 }
@@ -193,7 +194,7 @@ $env:_NT_SYMBOL_PATH = $SymbolPath
 # ---------------------------------------------------------------- analysis
 
 function Invoke-CdbAnalysis($dmp) {
-    # Синхронное вскрытие: cdb пишет в файл сам, кодировки не трогаем
+    # Synchronous opening: cdb writes the file itself, encodings untouched
     $outFile = "$dmp.analysis.txt"
     $cmd = "`"$cdb`" -z `"$dmp`" -c `"!analyze -v; .ecxr; kb; q`" > `"$outFile`" 2>&1"
     cmd /c $cmd | Out-Null
@@ -203,23 +204,23 @@ function Invoke-CdbAnalysis($dmp) {
 function Report-Analysis($dmp) {
     $outFile = "$dmp.analysis.txt"
     $txt = Get-Content $outFile -Raw -ErrorAction SilentlyContinue
-    if (-not $txt) { Log "  анализ пуст: $([IO.Path]::GetFileName($dmp))"; return }
+    if (-not $txt) { Log "  empty analysis: $([IO.Path]::GetFileName($dmp))"; return }
     $bucket  = [regex]::Match($txt, 'FAILURE_BUCKET_ID:\s*(\S+)').Groups[1].Value
     $comment = [regex]::Match($txt, '(?m)^\*\*\* (.+)$').Groups[1].Value
     $frames  = [regex]::Matches($txt, '(?m)^[0-9a-f`]+ [0-9a-f`]+\s+: (?:[0-9a-f` ]+: )?(\S+?)(\+0x[0-9a-fA-F]+)?\s*$') |
                Select-Object -First 8 | ForEach-Object { $_.Groups[1].Value }
-    Log "=== ВЕРДИКТ: $([IO.Path]::GetFileName($dmp)) ==="
-    if ($comment) { Log "  триггер: $comment" }
-    Log "  bucket: $(if ($bucket) {$bucket} else {'<не найден>'})"
+    Log "=== VERDICT: $([IO.Path]::GetFileName($dmp)) ==="
+    if ($comment) { Log "  trigger: $comment" }
+    Log "  bucket: $(if ($bucket) {$bucket} else {'<not found>'})"
     foreach ($f in ($frames | Select-Object -Unique)) { Log "  frame:  $f" }
-    Log "  полный разбор: $outFile"
+    Log "  full analysis: $outFile"
 }
 
-# ---- режим ручного вскрытия ----
+# ---- manual analysis mode ----
 if ($Analyze) {
-    if (-not (Test-Path $Analyze)) { Write-Host "Дамп не найден: $Analyze"; return }
-    if (-not $cdb) { Write-Host "cdb.exe не найден — вскрывать нечем."; return }
-    Write-Host "Вскрываю $Analyze (символы: $SymbolPath)..."
+    if (-not (Test-Path $Analyze)) { Write-Host "Dump not found: $Analyze"; return }
+    if (-not $cdb) { Write-Host "cdb.exe not found — nothing to open dumps with."; return }
+    Write-Host "Opening $Analyze (symbols: $SymbolPath)..."
     Invoke-CdbAnalysis $Analyze | Out-Null
     Report-Analysis $Analyze
     return
@@ -228,26 +229,26 @@ if ($Analyze) {
 # ---------------------------------------------------------------- guard
 
 if (-not $procdump) {
-    Log "procdump.exe не найден. https://learn.microsoft.com/sysinternals/downloads/procdump"
+    Log "procdump.exe not found. https://learn.microsoft.com/sysinternals/downloads/procdump"
     return
 }
 if (-not $cdb) {
-    Log "cdb.exe не найден (Windows SDK -> Debugging Tools) — дампы БЕЗ автоанализа."
+    Log "cdb.exe not found (Windows SDK -> Debugging Tools) — dumps WITHOUT auto-analysis."
 }
 
 $lockFile = Join-Path $DumpDir "hunter.lock"
 if (Test-Path $lockFile) {
     $oldPid = Get-Content $lockFile -ErrorAction SilentlyContinue
     if ($oldPid -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-        Write-Host "Охотник уже работает (PID $oldPid). Второй не нужен."
+        Write-Host "Hunter already running (PID $oldPid). No second one needed."
         return
     }
 }
 Set-Content -Path $lockFile -Value $PID
 
-Log "hunt-proc v3.4 запущен (PID $PID). конфиг: $(if (Test-Path $ConfigPath) {$ConfigPath} else {'<нет, дефолты>'})"
-Log "procdump: $procdump; cdb: $(if ($cdb) {$cdb} else {'нет'}); тип дампов: $DumpType ($dumpTypeArg)"
-Log "процессы: $($ProcessNames -join ', '); фильтры: $($ExceptionFilters -join ', '); дампы: $DumpDir"
+Log "hunt-proc v3.4 started (PID $PID). config: $(if (Test-Path $ConfigPath) {$ConfigPath} else {'<none, defaults>'})"
+Log "procdump: $procdump; cdb: $(if ($cdb) {$cdb} else {'none'}); dump type: $DumpType ($dumpTypeArg)"
+Log "processes: $($ProcessNames -join ', '); filters: $($ExceptionFilters -join ', '); dumps: $DumpDir"
 
 # ---------------------------------------------------------------- jobs
 
@@ -255,7 +256,7 @@ $analysisJobs = @{}
 
 function Start-DumpAnalysis($dmp) {
     if (-not $cdb) { return }
-    Log "анализ (в фоне): $([IO.Path]::GetFileName($dmp))..."
+    Log "analysis (background): $([IO.Path]::GetFileName($dmp))..."
     $analysisJobs[$dmp] = Start-Job -ScriptBlock {
         param($cdbPath, $dumpPath, $outPath, $symPath)
         $env:_NT_SYMBOL_PATH = $symPath
@@ -263,20 +264,20 @@ function Start-DumpAnalysis($dmp) {
     } -ArgumentList $cdb, $dmp, "$dmp.analysis.txt", $SymbolPath
 }
 
-# ---- дампы-сироты прошлых сессий ----
+# ---- orphan dumps from previous sessions ----
 $orphans = Get-ChildItem $DumpDir -Filter "*.dmp" -ErrorAction SilentlyContinue |
            Where-Object { $_.LastWriteTime -gt (Get-Date).AddHours(-$OrphanMaxAgeHours) -and
                           -not (Test-Path "$($_.FullName).analysis.txt") } |
            Sort-Object LastWriteTime
 if ($orphans) {
-    Log "найдено невскрытых дампов прошлых сессий: $($orphans.Count) — отправляю на вскрытие"
+    Log "unopened dumps from previous sessions found: $($orphans.Count) — sending for analysis"
     foreach ($d in $orphans) { Start-DumpAnalysis $d.FullName }
 }
 
 # ---------------------------------------------------------------- hunt loop
 
 $hunted = @{}    # pid -> @{ Proc; Log; Name }
-$submitted = @{} # путь дампа -> $true — уже отправлен на анализ (не разбираем дважды)
+$submitted = @{} # dump path -> $true — already sent for analysis (do not parse twice)
 $filterArgs = @()
 foreach ($f in $ExceptionFilters) { $filterArgs += @("-f", $f) }
 
@@ -284,47 +285,48 @@ $lastBeat = Get-Date
 while ($true) {
   try {
     if ((Get-Date) - $lastBeat -gt [TimeSpan]::FromMinutes(5)) {
-        Log "heartbeat: жив; под колпаком PID: $(if ($hunted.Count) {$hunted.Keys -join ', '} else {'никого'})"
+        Log "heartbeat: alive; under watch PID: $(if ($hunted.Count) {$hunted.Keys -join ', '} else {'none'})"
         $lastBeat = Get-Date
     }
 
-    # 1. Подцепить все инстансы отслеживаемых процессов, которые ещё не под колпаком
+    # 1. Attach to all instances of the tracked processes not yet under watch
     $procs = @(Get-Process -Name $ProcessNames -ErrorAction SilentlyContinue)
     foreach ($proc0 in $procs) {
         $p = $proc0.Id
         if ($hunted.ContainsKey($p)) { continue }
         $pName = $proc0.ProcessName
         $pdLog = Join-Path $DumpDir "procdump_${pName}_$p.txt"
-        # -e/-t/-h: first-chance исключения, завершение процесса, зависшее
-        # окно (-h — тот же механизм, которым Windows видит "Не отвечает").
+        # -e/-t/-h: first-chance exceptions, process termination, hung window
+        # (-h — the same mechanism Windows uses to report "Not responding").
         $pdArgs = @("-accepteula", $dumpTypeArg, "-e", "1") + $filterArgs +
                   @("-h", "-t", "-n", $MaxDumpsPerAttach, $p, $DumpDir)
         $proc = Start-Process -FilePath $procdump -ArgumentList $pdArgs `
                 -NoNewWindow -PassThru -RedirectStandardOutput $pdLog
         $hunted[$p] = @{ Proc = $proc; Log = $pdLog; Name = $pName }
-        Log "прицепился к $pName.exe PID $p (procdump PID $($proc.Id))"
+        Log "attached to $pName.exe PID $p (procdump PID $($proc.Id))"
     }
 
-    # 2. Кто из procdump'ов завершился — показать хвост лога и подсчитать
-    #    дампы от ЧИСТОГО завершения (Exit Code 0), которые не идут в cdb.
+    # 2. Which procdumps exited — show the log tail and count the dumps from a
+    #    CLEAN termination (Exit Code 0) that must not go to cdb.
     $done = @($hunted.Keys | Where-Object { $hunted[$_].Proc.HasExited })
-    $skipDumps = @{}   # путь -> $true — дампы от чистого завершения (Exit 0), не анализируем
+    $skipDumps = @{}   # path -> $true — dumps from clean termination (Exit 0), do not analyze
     foreach ($p in $done) {
-        Log "procdump для $($hunted[$p].Name).exe PID $p отцепился"
+        Log "procdump for $($hunted[$p].Name).exe PID $p detached"
         $logLines = @(Get-Content $hunted[$p].Log -Encoding Unicode -ErrorAction SilentlyContinue)
         $tail = $logLines |
                 Where-Object { $_ -match 'Dump \d+ (initiated|complete)|Terminated|Exception|Process Exit|Unhandled' } |
                 Select-Object -Last 8
         foreach ($t in $tail) { Log "  procdump[$($hunted[$p].Name):$p]: $($t.Trim())" }
 
-        # ProcDump сам не умеет фильтровать -t по коду выхода (проверено -?,
-        # такого флага нет) — дамп на диск он всё равно пишет. Но если
-        # завершение чистое (Exit Code 0x00000000 — обычное закрытие
-        # приложения, не крash), сам дамп бесполезен для BugReport: помечаем
-        # на удаление БЕЗ передачи в cdb, экономя и место, и ~минуту анализа.
-        # Дампы от РЕАЛЬНЫХ исключений в этой же сессии (Dump N initiated ДО
-        # строки Process Exit) не трогаем — считаем только те "Dump N
-        # initiated", что идут ПОСЛЕ строки чистого выхода.
+        # ProcDump itself cannot filter -t by exit code (checked with -?,
+        # there is no such flag) — it still writes the dump to disk. But if
+        # the termination is clean (Exit Code 0x00000000 — a normal app
+        # close, not a crash), the dump is useless for a BugReport: mark it
+        # for deletion WITHOUT handing it to cdb, saving both space and the
+        # ~minute of analysis. Dumps from REAL exceptions in this same
+        # session (Dump N initiated BEFORE the Process Exit line) are left
+        # alone — we only count the "Dump N initiated" lines that come AFTER
+        # the clean-exit line.
         $exitMatch = $logLines | Select-String 'Process Exit: PID \d+, Exit Code 0x00000000' |
                      Select-Object -First 1
         if ($exitMatch) {
@@ -334,18 +336,18 @@ while ($true) {
         }
     }
 
-    # 3. Разбор дампов КАЖДОГО подколпачного PID (включая только что
-    #    отцепившихся — они ещё в $hunted на этой итерации) по ЕГО
-    #    СОБСТВЕННОМУ логу, а не по глобу всей папки по времени изменения.
-    #    Старый глоб (Start-Sleep 2 + Get-ChildItem $DumpDir по mtime)
-    #    срабатывал только при ЧЬЁМ-ТО exit и мог поймать недописанный дамп
-    #    ДРУГОГО, ещё живого процесса (2026-08-21: cdb открыл
-    #    kicad.exe_260821_210426.dmp на середине записи). Путь даёт строка
-    #    "Dump N initiated: <path>", готовность файла — "Dump N complete";
-    #    сопоставляем по номеру N.
+    # 3. Parse the dumps of EVERY tracked PID (including the just-detached
+    #    ones — they are still in $hunted on this iteration) from its OWN
+    #    log, not from a directory-wide glob by mtime. The old glob
+    #    (Start-Sleep 2 + Get-ChildItem $DumpDir by mtime) only fired on
+    #    SOMEONE's exit and could catch a half-written dump of ANOTHER,
+    #    still-alive process (2026-08-21: cdb opened
+    #    kicad.exe_260821_210426.dmp mid-write). The path comes from the
+    #    "Dump N initiated: <path>" line, file readiness from "Dump N
+    #    complete"; match by dump number N.
     foreach ($p in @($hunted.Keys)) {
         $logLines = @(Get-Content $hunted[$p].Log -Encoding Unicode -ErrorAction SilentlyContinue)
-        $initiated = @{}   # N -> путь дампа из строк "Dump N initiated: <path>"
+        $initiated = @{}   # N -> dump path from "Dump N initiated: <path>" lines
         $logLines | Select-String 'Dump (\d+) initiated:\s*(.+\.dmp)' | ForEach-Object {
             $initiated[$_.Matches[0].Groups[1].Value] = $_.Matches[0].Groups[2].Value.Trim()
         }
@@ -356,7 +358,7 @@ while ($true) {
             $path = $initiated[$n]
             if ($submitted.ContainsKey($path) -or $analysisJobs.ContainsKey($path)) { continue }
             if ($skipDumps.ContainsKey($path)) {
-                Log "  чистое завершение (Exit 0) — дамп без анализа, удаляю: $([IO.Path]::GetFileName($path))"
+                Log "  clean termination (Exit 0) — dump without analysis, deleting: $([IO.Path]::GetFileName($path))"
                 Remove-Item $path -Force -ErrorAction SilentlyContinue
                 continue
             }
@@ -365,12 +367,12 @@ while ($true) {
         }
     }
 
-    # 4. Убрать отцепившихся из бухгалтерии (кого продолжать пытаться
-    #    подцепить заново). Удаляем ПОСЛЕ шага 3: их последний дамп по -t уже
-    #    в логе и должен успеть уйти на анализ.
+    # 4. Remove the detached ones from the bookkeeping (whom to keep trying to
+    #    re-attach). Remove AFTER step 3: their last dump by -t is already in
+    #    the log and must make it to analysis.
     foreach ($p in $done) { $hunted.Remove($p) }
 
-    # 5. Собрать готовые фоновые вскрытия
+    # 5. Collect finished background analyses
     $finished = @($analysisJobs.Keys | Where-Object { $analysisJobs[$_].State -ne 'Running' })
     foreach ($dmp in $finished) {
         Receive-Job $analysisJobs[$dmp] -ErrorAction SilentlyContinue | Out-Null
@@ -379,7 +381,7 @@ while ($true) {
         Report-Analysis $dmp
     }
   } catch {
-        Log "ОШИБКА ЦИКЛА (охотник продолжает): $($_.Exception.Message)"
+        Log "LOOP ERROR (hunter keeps running): $($_.Exception.Message)"
   }
     Start-Sleep -Seconds 3
 }

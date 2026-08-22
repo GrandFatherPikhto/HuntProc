@@ -1,37 +1,37 @@
-﻿# hunt-proc_config.psd1 — настройки охотника hunt-proc.ps1 (лежит рядом со скриптом).
-# Приоритет: параметры командной строки > этот файл > дефолты скрипта.
-# Формат .psd1 — родной для PowerShell, никаких зависимостей.
+﻿# hunt-proc.config.psd1 — settings for the hunt-proc.ps1 hunter (lives next to the script).
+# Precedence: command-line parameters > this file > script defaults.
+# .psd1 format is native to PowerShell, no dependencies.
 @{
-    # Какие процессы караулить (имена БЕЗ .exe). Можно несколько:
+    # Which processes to watch (names WITHOUT .exe). Several allowed:
     # ProcessNames = @('kicad', 'freecad', 'librepcb')
     ProcessNames      = @('kicad')
 
-    # Куда складывать дампы, hunter.log и procdump_*.txt
+    # Where to store dumps, hunter.log and procdump_*.txt
     DumpDir           = 'D:\Projects\WinDbg\KiCad'
 
-    # Локальный кэш символов (общий для Microsoft и KiCad)
+    # Local symbol cache (shared by Microsoft and KiCad)
     SymbolCache       = 'D:\Projects\WinDbg\SymbolsCache'
 
-    # Пути к инструментам ('' = искать автоматически)
+    # Paths to the tools ('' = auto-discover)
     ProcDumpPath      = 'D:\Utils\ProcDump.exe'
     CdbPath           = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
 
-    # Коды исключений, на которых пишем first-chance дамп:
+    # Exception codes on which to write a first-chance dump:
     #   C0000005 access violation, C0000409 fastfail/abort,
     #   80000003 breakpoint (wx-assert)
     ExceptionFilters  = @('C0000005', 'C0000409', '80000003')
 
-    # Сколько дампов пишет procdump, не отцепляясь
+    # How many dumps procdump writes without detaching
     MaxDumpsPerAttach = 5
 
-    # Full: -ma, вся память (гигабайты; для локального разбора)
-    # Mini: -mp, стеки+регистры (десятки МБ; влезает во вложение GitLab)
+    # Full: -ma, whole memory (gigabytes; for local analysis)
+    # Mini: -mp, stacks+registers (tens of MB; fits into a GitLab attachment)
     DumpType          = 'Full'
 
-    # Невскрытые дампы прошлых сессий старше N часов при старте не трогаем
+    # Unopened dumps from previous sessions older than N hours are not touched at startup
     OrphanMaxAgeHours = 24
 
-    # Серверы символов (кэш добавляется автоматически)
+    # Symbol servers (the cache is added automatically)
     SymbolServers     = @(
         'srv*https://msdl.microsoft.com/download/symbols',
         'srv*https://symbols.kicad.org/kicad-stable'

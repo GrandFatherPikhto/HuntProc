@@ -35,31 +35,31 @@ $ErrorActionPreference = 'Stop'
 
 $configPath = Join-Path $PSScriptRoot "hunt-proc.$Channel.config.psd1"
 if (-not (Test-Path $configPath)) {
-    Write-Host "ОШИБКА: конфиг канала не найден: $configPath" -ForegroundColor Red
+    Write-Host "ERROR: channel config not found: $configPath" -ForegroundColor Red
     exit 1
 }
 
 $config = Import-PowerShellDataFile $configPath
 if (-not $config.SymbolCache) {
-    Write-Host "ОШИБКА: в конфиге $configPath нет SymbolCache." -ForegroundColor Red
+    Write-Host "ERROR: no SymbolCache in config $configPath." -ForegroundColor Red
     exit 1
 }
 if (-not $config.SymbolServers) {
-    Write-Host "ОШИБКА: в конфиге $configPath нет SymbolServers." -ForegroundColor Red
+    Write-Host "ERROR: no SymbolServers in config $configPath." -ForegroundColor Red
     exit 1
 }
 
 # Same symbol-path assembly as hunt-proc.ps1: local cache first, then servers.
 $symbolPath = (@("cache*$($config.SymbolCache)") + $config.SymbolServers) -join ';'
 
-Write-Host "Канал: $Channel" -ForegroundColor Cyan
-Write-Host "Кэш символов: $($config.SymbolCache)" -ForegroundColor Cyan
+Write-Host "Channel: $Channel" -ForegroundColor Cyan
+Write-Host "Symbol cache: $($config.SymbolCache)" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------- KiCad
 
 if (-not (Test-Path -PathType Leaf $KicadExe)) {
-    Write-Host "ОШИБКА: бинарник KiCad не найден по пути: $KicadExe" -ForegroundColor Red
-    Write-Host "Укажи реальный путь явно через -KicadExe (версия не угадывается)." -ForegroundColor Red
+    Write-Host "ERROR: KiCad binary not found at: $KicadExe" -ForegroundColor Red
+    Write-Host "Pass the real path explicitly via -KicadExe (the version is not guessed)." -ForegroundColor Red
     exit 1
 }
 
@@ -68,8 +68,8 @@ $binDir = Split-Path -Parent $KicadExe
 $versionInfo = (Get-Item $KicadExe).VersionInfo
 $fileVersion = $versionInfo.FileVersion
 if (-not $fileVersion) { $fileVersion = $versionInfo.ProductVersion }
-Write-Host "Установленный KiCad: FileVersion $fileVersion (ProductVersion $($versionInfo.ProductVersion))" -ForegroundColor Cyan
-Write-Host "Качаю символы под эту версию из папки: $binDir" -ForegroundColor Cyan
+Write-Host "Installed KiCad: FileVersion $fileVersion (ProductVersion $($versionInfo.ProductVersion))" -ForegroundColor Cyan
+Write-Host "Fetching symbols for this version from: $binDir" -ForegroundColor Cyan
 
 # ---------------------------------------------------------------- symchk
 
@@ -98,7 +98,7 @@ function Find-SymChk {
 
 $symchk = Find-SymChk $SymChkPath $config.CdbPath
 if (-not $symchk) {
-    Write-Host "ОШИБКА: symchk.exe не найден (ищи рядом с cdb.exe / Debugging Tools)." -ForegroundColor Red
+    Write-Host "ERROR: symchk.exe not found (look next to cdb.exe / Debugging Tools)." -ForegroundColor Red
     exit 1
 }
 Write-Host "symchk: $symchk" -ForegroundColor Cyan
@@ -109,13 +109,13 @@ Write-Host "symchk: $symchk" -ForegroundColor Cyan
 # manual one-shot tool, so blocking on the user is fine here; hunt-proc.ps1
 # must stay unattended and must NOT get a pause like this.
 Write-Host ""
-Write-Host "ВНИМАНИЕ: сейчас пойдут запросы на $($config.SymbolServers -join ', ')" -ForegroundColor Yellow
-Write-Host "Убедись, что есть сетевой доступ к этим серверам." -ForegroundColor Yellow
-$null = Read-Host "Нажми Enter, когда готов (или Ctrl+C, чтобы отменить)"
+Write-Host "WARNING: requests will now go to $($config.SymbolServers -join ', ')" -ForegroundColor Yellow
+Write-Host "Make sure there is network access to these servers." -ForegroundColor Yellow
+$null = Read-Host "Press Enter when ready (or Ctrl+C to cancel)"
 
 Write-Host ""
-Write-Host "Символьный путь: $symbolPath" -ForegroundColor DarkGray
-Write-Host "Запускаю symchk по папке: $binDir" -ForegroundColor Cyan
+Write-Host "Symbol path: $symbolPath" -ForegroundColor DarkGray
+Write-Host "Running symchk on folder: $binDir" -ForegroundColor Cyan
 
 # Stream symchk output to the console as-is (manual tool, not background),
 # while keeping a copy of stdout so the summary lines can be highlighted.
@@ -125,12 +125,12 @@ $exitCode = $LASTEXITCODE
 Write-Host ""
 $summary = @($symchkLive | Where-Object { $_ -match 'SYMCHK:' })
 if ($summary) {
-    Write-Host "Сводка symchk:" -ForegroundColor Cyan
+    Write-Host "symchk summary:" -ForegroundColor Cyan
     foreach ($line in $summary) { Write-Host $line }
 }
 if ($exitCode -eq 0) {
     Write-Host "symchk exit code: $exitCode" -ForegroundColor Green
 } else {
-    Write-Host "symchk exit code: $exitCode — смотри строки SYMCHK выше." -ForegroundColor Yellow
+    Write-Host "symchk exit code: $exitCode — see the SYMCHK lines above." -ForegroundColor Yellow
 }
-Write-Host "Готово." -ForegroundColor Green
+Write-Host "Done." -ForegroundColor Green

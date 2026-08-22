@@ -1,21 +1,23 @@
-﻿# hunt-proc.stable.config.psd1 — тот же охотник, но с символами KiCad
-# stable-канала (https://symbols.kicad.org/kicad-stable) в ИЗОЛИРОВАННОМ кэше.
+﻿# hunt-proc.stable.config.psd1 — the same hunter, but with KiCad
+# stable-channel symbols (https://symbols.kicad.org/kicad-stable) in an
+# ISOLATED cache.
 #
-# Зачем отдельный конфиг: это дублирует канал основного hunt-proc.config.psd1,
-# но тот держит SymbolCache = 'D:\Projects\WinDbg\SymbolsCache' (общий с
-# Microsoft-символами, для боевой охоты). Этот конфиг — для того же ручного
-# разового скачивания символов, что и nightly/testing, с изолированным
-# кэшем, для единообразия трёх каналов.
+# Why a separate config: this duplicates the channel of the main
+# hunt-proc.config.psd1, but that one keeps SymbolCache =
+# 'D:\Projects\WinDbg\SymbolsCache' (shared with Microsoft symbols, for real
+# hunting). This config is for the same manual one-off symbol download as
+# nightly/testing, with an isolated cache, for consistency across the three
+# channels.
 #
-# Использование (ручной разбор уже существующего дампа этим каналом):
-#   powershell -File hunt-proc.ps1 -ConfigPath hunt-proc.stable.config.psd1 -Analyze <путь-к-дампу>
+# Usage (manual analysis of an existing dump with this channel):
+#   powershell -File hunt-proc.ps1 -ConfigPath hunt-proc.stable.config.psd1 -Analyze <path-to-dump>
 #
-# DumpDir/ProcessNames/ExceptionFilters и т.д. те же, что в основном конфиге.
+# DumpDir/ProcessNames/ExceptionFilters etc. are the same as in the main config.
 @{
     ProcessNames      = @('kicad')
     DumpDir           = 'D:\Projects\WinDbg\KiCad'
 
-    # Отдельный кэш под stable — не мешаем с боевым общим кэшем.
+    # A dedicated stable cache — keep it separate from the shared live cache.
     SymbolCache       = 'D:\Projects\WinDbg\KiCad\stable'
 
     ProcDumpPath      = 'D:\Utils\ProcDump.exe'
