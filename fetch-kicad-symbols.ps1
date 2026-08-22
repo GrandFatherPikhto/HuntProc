@@ -1,7 +1,7 @@
-﻿# fetch-kicad-symbols.ps1 — standalone KiCad symbol (PDB) prefetch for the
-# manual VPN workflow. Runs independently of hunt-proc.ps1: no crash dump is
-# required, it just downloads PDBs for every binary of the currently
-# installed KiCad into the local symbol cache via `symchk /r`.
+﻿# fetch-kicad-symbols.ps1 — standalone KiCad symbol (PDB) prefetch. Runs
+# independently of hunt-proc.ps1: no crash dump is required, it just
+# downloads PDBs for every binary of the currently installed KiCad into the
+# local symbol cache via `symchk /r`.
 #
 # Usage:
 #   powershell -File fetch-kicad-symbols.ps1 -Channel testing
@@ -12,7 +12,7 @@
 #   SymbolCache / SymbolServers — no URLs or cache paths are hardcoded here.
 #
 # Deliberately interactive: it prints the installed KiCad file version, then
-# pauses for an explicit VPN confirmation before the first network request.
+# pauses for an explicit confirmation before the first network request.
 # Unlike hunt-proc.ps1's unattended background loop, this is a manual,
 # one-shot tool.
 
@@ -110,7 +110,7 @@ Write-Host "symchk: $symchk" -ForegroundColor Cyan
 # must stay unattended and must NOT get a pause like this.
 Write-Host ""
 Write-Host "ВНИМАНИЕ: сейчас пойдут запросы на $($config.SymbolServers -join ', ')" -ForegroundColor Yellow
-Write-Host "Включи VPN, если он нужен для доступа к этим серверам." -ForegroundColor Yellow
+Write-Host "Убедись, что есть сетевой доступ к этим серверам." -ForegroundColor Yellow
 $null = Read-Host "Нажми Enter, когда готов (или Ctrl+C, чтобы отменить)"
 
 Write-Host ""
@@ -133,4 +133,4 @@ if ($exitCode -eq 0) {
 } else {
     Write-Host "symchk exit code: $exitCode — смотри строки SYMCHK выше." -ForegroundColor Yellow
 }
-Write-Host "Готово — можно выключать VPN." -ForegroundColor Green
+Write-Host "Готово." -ForegroundColor Green

@@ -4,8 +4,8 @@
 # Зачем отдельный конфиг: это дублирует канал основного hunt-proc.config.psd1,
 # но тот держит SymbolCache = 'D:\Projects\WinDbg\SymbolsCache' (общий с
 # Microsoft-символами, для боевой охоты). Этот конфиг — для того же ручного
-# VPN-workflow, что и nightly/testing, с изолированным кэшем, для
-# единообразия трёх каналов.
+# разового скачивания символов, что и nightly/testing, с изолированным
+# кэшем, для единообразия трёх каналов.
 #
 # Использование (ручной разбор уже существующего дампа этим каналом):
 #   powershell -File hunt-proc.ps1 -ConfigPath hunt-proc.stable.config.psd1 -Analyze <путь-к-дампу>

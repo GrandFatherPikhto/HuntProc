@@ -1,54 +1,54 @@
-# Процесс‑охотник (hunt-proc.ps1)
+# Process Hunter (hunt-proc.ps1)
 
-Универсальный скрипт для автоматического сбора дампов памяти и анализа аварийных завершений произвольных процессов (не только KiCad). Работает как демон: отслеживает появление новых экземпляров заданных исполняемых файлов, прикрепляет к каждому `procdump` (Sysinternals), а по факту сбоя или завершения – автоматически вскрывает дамп с помощью `cdb.exe` и выдаёт краткий вердикт.
-
----
-
-## Возможности
-
-- **Мультипроцессность** – следит одновременно за несколькими приложениями (список в конфиге).
-- **Гибкие фильтры исключений** – перехватывает first‑chance исключения (AV, fastfail, breakpoint и др.) и завершение процесса (`-t`).
-- **Автоанализ в фоне** – каждый свежий дамп обрабатывается `cdb.exe` в отдельном фоновом задании (`Start-Job`), не блокируя основной цикл.
-- **Полный или мини‑дамп** – на выбор: `-ma` (вся память, гигабайты) или `-mp` (только стеки/регистры, десятки МБ – удобно для вложений в GitLab/почту).
-- **Работа с символами** – поддерживает несколько серверов символов (Microsoft, KiCad, любые другие); кэш общий.
-- **Подбор «сирот»** – при запуске находит невскрытые дампы прошлых сессий и доанализирует их.
-- **Режим ручного анализа** – `-Analyze путь\к\файлу.dmp` для разового вскрытия.
-- **Автостарт** – установка задачи в Планировщик Windows при входе в систему.
+A universal script for automatically collecting memory dumps and analyzing crashes of arbitrary processes (not only KiCad). It runs as a daemon: watches for new instances of the configured executables, attaches `procdump` (Sysinternals) to each one, and on crash or exit automatically analyzes the dump with `cdb.exe` and prints a short verdict.
 
 ---
 
-## Требования
+## Features
+
+- **Multi-process** — watches several applications at once (list in the config).
+- **Flexible exception filters** — catches first-chance exceptions (AV, fastfail, breakpoint, etc.) and process termination (`-t`).
+- **Background auto-analysis** — each fresh dump is processed by `cdb.exe` in a separate background job (`Start-Job`) without blocking the main loop.
+- **Full or mini dump** — your choice: `-ma` (full memory, gigabytes) or `-mp` (stacks/registers only, tens of MB — convenient for GitLab/email attachments).
+- **Symbol support** — several symbol servers (Microsoft, KiCad, any others); shared cache.
+- **Orphan pickup** — on startup it finds unanalyzed dumps from previous sessions and analyzes them too.
+- **Manual analysis mode** — `-Analyze path\to\file.dmp` for a one-off analysis.
+- **Autostart** — registers a Windows Scheduled Task to run at logon.
+
+---
+
+## Requirements
 
 - **Windows 10 / 11 / Server 2016+**
-- **PowerShell 5.1** (или выше)
-- **ProcDump** – скачать с [Sysinternals](https://learn.microsoft.com/sysinternals/downloads/procdump) (файл `procdump.exe`)
-- **cdb.exe** – входит в состав **Windows SDK** (Debugging Tools for Windows)  
-  Типовые пути:
+- **PowerShell 5.1** (or newer)
+- **ProcDump** — download from [Sysinternals](https://learn.microsoft.com/sysinternals/downloads/procdump) (`procdump.exe`)
+- **cdb.exe** — part of the **Windows SDK** (Debugging Tools for Windows)  
+  Typical paths:
   - `C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe`
   - `C:\Program Files\Windows Kits\10\Debuggers\x64\cdb.exe`
-- **Доступ к серверам символов** (локальный кэш или интернет) – настройка в конфиге.
+- **Access to symbol servers** (local cache or internet) — configured in the config file.
 
 ---
 
-## Установка и настройка
+## Installation and setup
 
-1. **Скопируйте файлы** в удобную папку:
-   - `hunt-proc.ps1` – основной скрипт
-   - `hunt-proc.config.psd1` – файл настроек (лежит рядом со скриптом)
+1. **Copy the files** to a convenient folder:
+   - `hunt-proc.ps1` — the main script
+   - `hunt-proc.config.psd1` — the settings file (lives next to the script)
 
-2. **Отредактируйте конфиг** (`hunt-proc.config.psd1`) под свои нужды.  
-   Пример содержания:
+2. **Edit the config** (`hunt-proc.config.psd1`) to fit your needs.  
+   Example contents:
 
 ```powershell
 @{
-    ProcessNames      = @('kicad', 'freecad')   # без .exe
+    ProcessNames      = @('kicad', 'freecad')   # without .exe
     DumpDir           = 'D:\Projects\WinDbg\KiCad'
     SymbolCache       = 'D:\Projects\WinDbg\SymbolsCache'
     ProcDumpPath      = 'D:\Utils\ProcDump.exe'
     CdbPath           = 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe'
     ExceptionFilters  = @('C0000005', 'C0000409', '80000003')
     MaxDumpsPerAttach = 5
-    DumpType          = 'Full'          # или 'Mini'
+    DumpType          = 'Full'          # or 'Mini'
     OrphanMaxAgeHours = 24
     SymbolServers     = @(
         'srv*https://msdl.microsoft.com/download/symbols',
@@ -57,204 +57,205 @@
 }
 ```
 
-3. **Убедитесь, что пути к `procdump.exe` и `cdb.exe` верны** – скрипт пытается найти их автоматически, но лучше указать явно.
+3. **Make sure the paths to `procdump.exe` and `cdb.exe` are correct** — the script tries to find them automatically, but it is better to set them explicitly.
 
-4. **Создайте каталоги**, указанные в `DumpDir` и `SymbolCache` – они будут созданы автоматически, если их нет.
+4. **Create the directories** named in `DumpDir` and `SymbolCache` — they are created automatically if missing.
 
 ---
 
-## Использование
+## Usage
 
-### Ручной запуск (отладка)
+### Manual run (debugging)
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\hunt-proc.ps1
 ```
 
-Скрипт начнёт следить за процессами из списка `ProcessNames`. В консоль будут выводиться сообщения о старте, прикреплении, появлении дампов и вердиктах.  
-Чтобы остановить – нажмите `Ctrl+C`.
+The script starts watching processes from the `ProcessNames` list. The console shows messages about startup, attachment, new dumps, and verdicts.  
+To stop, press `Ctrl+C`.
 
-### Ручной анализ одного дампа
+### Manual analysis of a single dump
 
 ```powershell
 .\hunt-proc.ps1 -Analyze "D:\dumps\kicad_220101_123456.dmp"
 ```
 
-Будет выполнен анализ с текущими настройками символов, результат сохранится в `*.analysis.txt`, а краткий вердикт – в консоль.
+The dump is analyzed with the current symbol settings; the result is saved to `*.analysis.txt`, and a short verdict is printed to the console.
 
-### Установка задачи для автостарта
+### Install the autostart task
 
 ```powershell
 .\hunt-proc.ps1 -Install
 ```
 
-Создаётся задача `ProcDumpHunter` в Планировщике, которая запускает скрипт при каждом входе текущего пользователя.
+Creates the `ProcDumpHunter` scheduled task that runs the script at every logon of the current user.
 
-### Удаление задачи
+### Remove the task
 
 ```powershell
 .\hunt-proc.ps1 -Uninstall
 ```
 
-### Перезапуск задачи (если она уже запущена)
+### Restart the task (if it is already running)
 
 ```powershell
 Stop-ScheduledTask -TaskName "ProcDumpHunter"
 Start-ScheduledTask -TaskName "ProcDumpHunter"
 ```
 
-Либо через оснастку `taskschd.msc`.
+Or via the `taskschd.msc` snap-in.
 
 ---
 
-## Конфигурация (файл .psd1)
+## Configuration (.psd1 file)
 
-| Параметр | Тип | Описание |
-|----------|-----|----------|
-| `ProcessNames` | `string[]` | Список имён процессов **без `.exe`** (например, `kicad`, `freecad`). |
-| `DumpDir` | `string` | Каталог для дампов, логов и файлов вывода `procdump`. |
-| `SymbolCache` | `string` | Локальный кэш для PDB‑файлов (используется `cdb` и `symchk`). |
-| `ProcDumpPath` | `string` | Полный путь к `procdump.exe`. Если пусто – скрипт ищет в `PATH` и типовых папках. |
-| `CdbPath` | `string` | Полный путь к `cdb.exe`. Если пусто – авто-поиск. |
-| `ExceptionFilters` | `string[]` | HEX-коды исключений, на которые реагирует `procdump` (first‑chance). |
-| `MaxDumpsPerAttach` | `int` | Сколько дампов можно создать за один сеанс мониторинга процесса. |
-| `DumpType` | `string` | `Full` (полный дамп, `-ma`) или `Mini` (только стеки и регистры, `-mp`). |
-| `OrphanMaxAgeHours` | `int` | Дампы старше этого количества часов считаются «старыми» и при старте не анализируются. |
-| `SymbolServers` | `string[]` | Список серверов символов (формат `srv*<URL>`). Кэш из `SymbolCache` добавляется автоматически. |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `ProcessNames` | `string[]` | Process names **without `.exe`** (e.g. `kicad`, `freecad`). |
+| `DumpDir` | `string` | Directory for dumps, logs, and `procdump` output files. |
+| `SymbolCache` | `string` | Local cache for PDB files (used by `cdb` and `symchk`). |
+| `ProcDumpPath` | `string` | Full path to `procdump.exe`. If empty, the script searches `PATH` and typical folders. |
+| `CdbPath` | `string` | Full path to `cdb.exe`. If empty, auto-search. |
+| `ExceptionFilters` | `string[]` | HEX exception codes that `procdump` reacts to (first-chance). |
+| `MaxDumpsPerAttach` | `int` | How many dumps may be created per process-monitoring session. |
+| `DumpType` | `string` | `Full` (complete dump, `-ma`) or `Mini` (stacks and registers only, `-mp`). |
+| `OrphanMaxAgeHours` | `int` | Dumps older than this many hours are considered "old" and are not analyzed at startup. |
+| `SymbolServers` | `string[]` | List of symbol servers (`srv*<URL>` format). The `SymbolCache` cache is added automatically. |
 
-**Приоритет:** параметры командной строки (если заданы) перекрывают значения из конфига, которые, в свою очередь, перекрывают жёсткие дефолты внутри скрипта.
+**Priority:** command-line parameters (when set) override config values, which in turn override the hardcoded defaults inside the script.
 
 ---
 
-## Что происходит во время работы
+## What happens while it runs
 
-1. **Охотник** периодически сканирует системные процессы на наличие имён из `ProcessNames`.
-2. Для каждого нового процесса запускается отдельный экземпляр `procdump` с ключами:
-   - `-e 1` – first‑chance исключения
-   - `-f` – фильтр по кодам
-   - `-t` – дамп при завершении (включая «тихий» выход)
-   - `-n N` – ограничение числа дампов
-   - `-ma` или `-mp` – тип дампа
-3. `procdump` пишет дампы в `DumpDir` и ведёт свой лог в файл `procdump_<процесс>_<PID>.txt`.
-4. Как только появляется новый `.dmp`-файл, скрипт запускает фоновое задание (`Start-Job`), которое вызывает `cdb` с командами:
+1. The **hunter** periodically scans system processes for names from `ProcessNames`.
+2. For each new process it launches a separate `procdump` instance with the flags:
+   - `-e 1` — first-chance exceptions
+   - `-f` — exception code filters
+   - `-t` — dump on termination (including a "silent" exit)
+   - `-n N` — dump count limit
+   - `-ma` or `-mp` — dump type
+3. `procdump` writes dumps to `DumpDir` and keeps its log in `procdump_<process>_<PID>.txt`.
+4. As soon as a new `.dmp` file appears, the script starts a background job (`Start-Job`) that runs `cdb` with:
    ```
    !analyze -v; .ecxr; kb; q
    ```
-   Результат сохраняется в `<имя_дампа>.analysis.txt`.
-5. После завершения анализа скрипт извлекает из текста:
-   - **FAILURE_BUCKET_ID** – краткий идентификатор ошибки
-   - **триггер** – первая строка с `***` (часто содержит описание исключения)
-   - **первые 8 уникальных фреймов стека** (имён функций)
-   Всё это выводится в `hunter.log` и в консоль.
+   The result is saved to `<dump_name>.analysis.txt`.
+5. After analysis finishes, the script extracts from the text:
+   - **FAILURE_BUCKET_ID** — a short error identifier
+   - **trigger** — the first line with `***` (often contains the exception description)
+   - **the first 8 unique stack frames** (function names)
+   All of this is printed to `hunter.log` and to the console.
 
-6. Цикл продолжается, охотник следит за новыми процессами и завершившимися экземплярами `procdump`.
+6. The loop continues; the hunter keeps watching for new processes and finished `procdump` instances.
 
 ---
 
-## Символы
+## Symbols
 
-**Путь к символам** формируется автоматически из:
+The **symbol path** is assembled automatically from:
 ```
 cache*$SymbolCache;$SymbolServers
 ```
-где `$SymbolServers` – массив из конфига.
+where `$SymbolServers` is the array from the config.
 
-Если ваша сеть блокирует `msdl.microsoft.com`, можно убрать эту строку из `SymbolServers` или оставить только локальный сервер (например, для KiCad).  
-Убедитесь, что `SymbolCache` существует и доступен для записи – `cdb` будет складывать туда скачанные PDB.
+If your network blocks `msdl.microsoft.com`, you can remove that entry from `SymbolServers` or keep only a local server (e.g. for KiCad).  
+Make sure `SymbolCache` exists and is writable — `cdb` will store downloaded PDBs there.
 
 ---
 
-## Канальные конфиги и ручная закачка символов под VPN
+## Channel configs and manual symbol prefetch
 
-Кроме основного `hunt-proc.config.psd1` (боевая охота, `kicad-stable`,
-общий с Microsoft-символами кэш `D:\Projects\WinDbg\SymbolsCache`) есть три
-sibling-конфига под отдельные каналы символов KiCad:
+Besides the main `hunt-proc.config.psd1` (production hunting, `kicad-stable`,
+cache shared with Microsoft symbols at `D:\Projects\WinDbg\SymbolsCache`) there
+are three sibling configs for separate KiCad symbol channels:
 
-| Конфиг | Канал | Кэш символов |
-|--------|-------|--------------|
+| Config | Channel | Symbol cache |
+|--------|---------|--------------|
 | `hunt-proc.nightly.config.psd1` | `kicad-nightly` | `D:\Projects\WinDbg\KiCad\nightly` |
 | `hunt-proc.testing.config.psd1` | `kicad-testing` | `D:\Projects\WinDbg\KiCad\testing` |
 | `hunt-proc.stable.config.psd1` | `kicad-stable` | `D:\Projects\WinDbg\KiCad\stable` |
 
-У каждого канала свой изолированный кэш: `symbols.kicad.org` отдаёт разные
-наборы символов по разным каналам, и PDB с одинаковым именем модуля, но
-разным содержимым не должны смешиваться в одном кэше.
+Each channel has its own isolated cache: `symbols.kicad.org` serves different
+symbol sets per channel, and PDBs with the same module name but different
+contents must not mix in one cache.
 
-### Ручной разбор дампа конкретным каналом
+### Manual dump analysis with a specific channel
 
 ```powershell
 .\hunt-proc.ps1 -ConfigPath hunt-proc.testing.config.psd1 -Analyze "D:\dumps\kicad.dmp"
 ```
 
-### Разовое скачивание PDB под установленный KiCad (без дампа)
+### One-off PDB prefetch for the installed KiCad (no dump needed)
 
-`fetch-kicad-symbols.ps1` качает символы под все бинарники установленной
-версии KiCad через `symchk /r`, без привязки к конкретному дампу. Workflow:
-включить VPN → запустить скрипт → дождаться окончания → выключить VPN —
-дальше `cdb`/`hunt-proc` берут символы из локального кэша офлайн.
+`fetch-kicad-symbols.ps1` downloads symbols for every binary of the installed
+KiCad version via `symchk /r`, without depending on a specific dump. Workflow:
+make sure the symbol servers are reachable → run the script → wait for it to
+finish — afterwards `cdb`/`hunt-proc` read symbols from the local cache and no
+network access is needed.
 
 ```powershell
 .\fetch-kicad-symbols.ps1 -Channel testing
 ```
 
-Скрипт печатает версию установленного KiCad, предупреждает о сетевых
-запросах и ждёт подтверждения (Enter) перед первым обращением к серверам.
-Параметры:
+The script prints the installed KiCad version, warns about the upcoming
+network requests, and waits for confirmation (Enter) before contacting the
+servers. Parameters:
 
-| Параметр | Описание |
-|----------|----------|
-| `-Channel` | Канал символов: `nightly`, `testing` или `stable` (обязательный). |
-| `-KicadExe` | Путь к `kicad.exe` (по умолчанию — стандартный путь установки). |
-| `-SymChkPath` | Путь к `symchk.exe` (по умолчанию ищется рядом с `cdb.exe`). |
-
----
-
-## Типы дампов и их размер
-
-- **Full** (`-ma`) – содержит всё адресное пространство процесса. Размер может достигать нескольких гигабайт. Рекомендуется для глубокого локального анализа.
-- **Mini** (`-mp`) – только стеки потоков, регистры и основные структуры. Размер обычно 20–100 МБ, что позволяет прикреплять дампы к баг-репортам или отправлять по почте.
+| Parameter | Description |
+|-----------|-------------|
+| `-Channel` | Symbol channel: `nightly`, `testing`, or `stable` (required). |
+| `-KicadExe` | Path to `kicad.exe` (defaults to the standard install path). |
+| `-SymChkPath` | Path to `symchk.exe` (by default searched next to `cdb.exe`). |
 
 ---
 
-## Устранение неполадок
+## Dump types and their size
 
-| Проблема | Решение |
-|----------|---------|
-| **ProcDump не найден** | Скачайте `procdump.exe` и укажите путь в конфиге (или положите в `C:\Tools`). |
-| **cdb не найден** | Установите Windows SDK (выберите «Debugging Tools for Windows») или укажите путь в конфиге. |
-| **Анализ выдаёт только адреса, без имён функций** | Проверьте доступ к серверам символов. Включите `!sym noisy` вручную для диагностики. Убедитесь, что PDB подходят к вашей версии бинарников. |
-| **Долгие таймауты при анализе** | Удалите из `SymbolServers` недоступные серверы (например, `msdl.microsoft.com`). |
-| **Скрипт не видит свежие дампы** | Проверьте время создания дампа (должно быть позже `$hunterStart`). Если дамп был создан до запуска охотника, он обрабатывается как сирота (если не старше `OrphanMaxAgeHours`). |
-| **Несколько охотников одновременно** | Создаётся lock-файл `hunter.lock` в `DumpDir`. Второй экземпляр завершится с сообщением «Охотник уже работает». |
+- **Full** (`-ma`) — contains the whole process address space. Size can reach several gigabytes. Recommended for deep local analysis.
+- **Mini** (`-mp`) — only thread stacks, registers, and key structures. Usually 20–100 MB, so dumps can be attached to bug reports or sent by email.
 
 ---
 
-## Примеры
+## Troubleshooting
 
-**Запуск с собственным конфигом (не рядом со скриптом):**
+| Problem | Solution |
+|---------|----------|
+| **ProcDump not found** | Download `procdump.exe` and set the path in the config (or put it in `C:\Tools`). |
+| **cdb not found** | Install the Windows SDK (select "Debugging Tools for Windows") or set the path in the config. |
+| **Analysis shows only addresses, no function names** | Check access to the symbol servers. Run `!sym noisy` manually for diagnostics. Make sure the PDBs match your binary versions. |
+| **Long timeouts during analysis** | Remove unreachable servers (e.g. `msdl.microsoft.com`) from `SymbolServers`. |
+| **Script does not see fresh dumps** | Check the dump creation time (must be later than `$hunterStart`). If the dump was created before the hunter started, it is treated as an orphan (if not older than `OrphanMaxAgeHours`). |
+| **Several hunters at once** | A `hunter.lock` file is created in `DumpDir`. A second instance exits with an "already running" message. |
+
+---
+
+## Examples
+
+**Run with a custom config (not next to the script):**
 ```powershell
 .\hunt-proc.ps1 -ConfigPath "C:\my_settings\my_config.psd1"
 ```
 
-**Переопределение параметра через командную строку (перекрывает конфиг):**
+**Override a parameter via the command line (overrides the config):**
 ```powershell
 .\hunt-proc.ps1 -DumpType Mini -MaxDumpsPerAttach 2
 ```
 
-**Автоустановка с указанием параметров (конфиг всё равно будет использоваться для остальных):**
+**Auto-install with parameters (the config is still used for the rest):**
 ```powershell
 .\hunt-proc.ps1 -Install -DumpDir "E:\dumps" -SymbolCache "E:\symcache"
 ```
 
 ---
 
-## Лицензия и благодарности
+## License and acknowledgements
 
-Скрипт распространяется «как есть», без каких-либо гарантий.  
-Использует:
-- **ProcDump** – © Microsoft / Sysinternals
-- **cdb / Debugging Tools for Windows** – © Microsoft
+The script is provided "as is", without any warranties.  
+Uses:
+- **ProcDump** — © Microsoft / Sysinternals
+- **cdb / Debugging Tools for Windows** — © Microsoft
 
 ---
 
-**Удачной охоты за ошибками! 🐾**
+**Happy bug hunting! 🐾**
