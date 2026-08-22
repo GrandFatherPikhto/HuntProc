@@ -164,6 +164,51 @@ cache*$SymbolCache;$SymbolServers
 
 ---
 
+## Канальные конфиги и ручная закачка символов под VPN
+
+Кроме основного `hunt-proc.config.psd1` (боевая охота, `kicad-stable`,
+общий с Microsoft-символами кэш `D:\Projects\WinDbg\SymbolsCache`) есть три
+sibling-конфига под отдельные каналы символов KiCad:
+
+| Конфиг | Канал | Кэш символов |
+|--------|-------|--------------|
+| `hunt-proc.nightly.config.psd1` | `kicad-nightly` | `D:\Projects\WinDbg\KiCad\nightly` |
+| `hunt-proc.testing.config.psd1` | `kicad-testing` | `D:\Projects\WinDbg\KiCad\testing` |
+| `hunt-proc.stable.config.psd1` | `kicad-stable` | `D:\Projects\WinDbg\KiCad\stable` |
+
+У каждого канала свой изолированный кэш: `symbols.kicad.org` отдаёт разные
+наборы символов по разным каналам, и PDB с одинаковым именем модуля, но
+разным содержимым не должны смешиваться в одном кэше.
+
+### Ручной разбор дампа конкретным каналом
+
+```powershell
+.\hunt-proc.ps1 -ConfigPath hunt-proc.testing.config.psd1 -Analyze "D:\dumps\kicad.dmp"
+```
+
+### Разовое скачивание PDB под установленный KiCad (без дампа)
+
+`fetch-kicad-symbols.ps1` качает символы под все бинарники установленной
+версии KiCad через `symchk /r`, без привязки к конкретному дампу. Workflow:
+включить VPN → запустить скрипт → дождаться окончания → выключить VPN —
+дальше `cdb`/`hunt-proc` берут символы из локального кэша офлайн.
+
+```powershell
+.\fetch-kicad-symbols.ps1 -Channel testing
+```
+
+Скрипт печатает версию установленного KiCad, предупреждает о сетевых
+запросах и ждёт подтверждения (Enter) перед первым обращением к серверам.
+Параметры:
+
+| Параметр | Описание |
+|----------|----------|
+| `-Channel` | Канал символов: `nightly`, `testing` или `stable` (обязательный). |
+| `-KicadExe` | Путь к `kicad.exe` (по умолчанию — стандартный путь установки). |
+| `-SymChkPath` | Путь к `symchk.exe` (по умолчанию ищется рядом с `cdb.exe`). |
+
+---
+
 ## Типы дампов и их размер
 
 - **Full** (`-ma`) – содержит всё адресное пространство процесса. Размер может достигать нескольких гигабайт. Рекомендуется для глубокого локального анализа.
